@@ -1,0 +1,7 @@
+*.pyc
+
+linkLogs
+logs
+torrents
+settings.json
+settings.yml
