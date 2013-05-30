@@ -61,7 +61,7 @@ def main(args):
 						log(movie['title'] + ": " + str(ex))
 					except socket.error as ex:
 						log(movie['title'] + ": " + str(ex))
-			
+
 			for show in settingsObj['shows']:
 				show.update({k:v for k,v in settingsObj['default']['show'].iteritems() if k not in show})
 				show['attempts'] = 2
@@ -122,11 +122,11 @@ def doShow(show):
 		log('no such engine: ' + engine + '. Skipping show.')
 		return
 	engine = getattr(engines, engine)
-	
+
 	showMinSeed = 0
 	if 'seeds' in show:
 		showMinSeed = int(show['seeds'])
-	
+
 	episodesFileName = folder + os.sep + 'episodes.txt'
 	if not os.path.exists(episodesFileName):
 		f = open(episodesFileName, 'w')
@@ -136,7 +136,7 @@ def doShow(show):
 	f.close()
 	maxEp = getMaxEpisode(re.split('\n', eps)[0:-1])
 	#print maxEp
-	
+
 	url = engine.constructURL(show)
 	htmlFileName = folder + os.sep + 'lastFetch.html'
 	response = urllib2.urlopen(url, None, 60)
@@ -146,53 +146,53 @@ def doShow(show):
 	f = open(htmlFileName, 'w')
 	f.write(html)
 	f.close()
-	
+
 	items = engine.getItems(html)
-	
+
 	for itemObj in items:
-		
+
 		#print itemObj
-		
+
 		if ('title' not in itemObj) or ('link' not in itemObj) or (('seeds' in itemObj) and (itemObj['seeds'] < showMinSeed)):
 			continue
-		
+
 		if ('user' in show) and ('user' in itemObj) and (show['user'] <> itemObj['user']):
 			continue
-		
+
 		if not ('season' in itemObj and 'episode' in itemObj):
 			continue
-		
+
 		#print itemObj['season'], itemObj['episode']
-		
+
 		episode = int(itemObj['season'] + itemObj['episode'])
 		if episode < maxEp:
 			continue
-		
+
 		f = open(episodesFileName, 'r')
 		eps = f.read()
 		f.close()
 		seen = re.findall('^' + str(episode) + '$', eps, re.MULTILINE)#need to add "PROPER"
 		if len(seen) > 0:
 			continue
-		
+
 		goodTitle, rule = titleOK(show, itemObj['title'])
 		if not goodTitle:
 			if rule is not None:
 				log("deny: " + itemObj['title'] + ". rule: " + rule)
 			continue
-		
+
 		log('new episode: ' + str(episode))
-		
+
 		logLink(itemObj['link'])
-		
+
 		#filePath = folder + os.sep + os.path.split(itemObj['link'])[-1]
 		filePath = folder + os.sep + cleanTitle(itemObj['title'])
-		
+
 		#urllib.urlretrieve(itemObj['link'], filePath)
-		
+
 		#os.startfile(filePath)
 		os.startfile(itemObj['link'])
-		
+
 		f = open(episodesFileName, 'a')
 		f.write(str(episode) + '\n')
 		f.close()
@@ -209,19 +209,19 @@ def doMovie(movie):
 		log('no such engine: ' + engine + '. Skipping movie.')
 		return
 	engine = getattr(engines, engine)
-	
+
 	movieMinSeed = 0
 	if 'seeds' in movie:
 		movieMinSeed = int(movie['seeds'])
-	
+
 	movieMinSize = 0
 	if 'size>' in movie:
 		movieMinSize = int(movie['size>'])
-	
+
 	maxItems = 1
 	if 'maxItems' in movie:
 		maxItems = int(movie['maxItems'])
-	
+
 	dlFilePath = folder + os.sep + 'downloaded.txt'
 	if not os.path.exists(dlFilePath):
 		f = open(dlFilePath, 'w')
@@ -230,18 +230,18 @@ def doMovie(movie):
 	dlStrList = f.read()
 	f.close()
 	dlList = re.split('\n', dlStrList)[0:-1]
-	
+
 	if len(dlList) >= maxItems:
 		return
-	
+
 	log("Movie: " + movie['title'])
-	
+
 	if 'url' in movie:
 		url = movie['url']
 	else:
 		url = engine.constructURL(movie)
 	htmlFileName = folder + os.sep + 'lastFetch.html'
-	
+
 	response = urllib2.urlopen(url, None, 60)
 	movie['attempts'] = 0
 	html = response.read()
@@ -249,55 +249,55 @@ def doMovie(movie):
 	f = open(htmlFileName, 'w')
 	f.write(html)
 	f.close()
-	
+
 	# f = open(htmlFileName, 'r')
 	# html = f.read()
 	# f.close()
-	
+
 	items = engine.getItems(html)
-	
+
 	for itemObj in items:
 		if ('title' not in itemObj) or ('link' not in itemObj) or (('seeds' in itemObj) and (itemObj['seeds'] < movieMinSeed)):
 			continue
-		
+
 		if ('user' in movie) and ('user' in itemObj) and (movie['user'] <> itemObj['user']):
 			continue
-		
+
 		if 'season' in itemObj or 'episode' in itemObj:
 			continue
-		
+
 		if ('size>' in movie) and (itemObj['size'] < movieMinSize):
 			continue
-		
+
 		f = open(dlFilePath, 'r')
 		dlStrList = f.read()
 		f.close()
 		dlList = re.split('\n', dlStrList)[0:-1]
 		if len(dlList) >= maxItems:
 			break
-		
+
 		title = itemObj['title']
 		cTitle = cleanTitle(itemObj['title'])
 		#fileName = os.path.split(itemObj['link'])[-1]
 		if title in dlList:
 			continue
-		
+
 		goodTitle, rule = titleOK(movie, title)
 		if not goodTitle:
 			if rule is not None:
 				log("deny: " + title + ". rule: " + rule)
 			continue
-		
+
 		log('new movie: ' + str(cTitle))
 		logLink(itemObj['link'])
-		
+
 		#filePath = folder + os.sep + fileName
-		
+
 		#urllib.urlretrieve(itemObj['link'], filePath)
-		
+
 		#os.startfile(filePath)
 		os.startfile(itemObj['link'])
-		
+
 		f = open(dlFilePath, 'a')
 		f.write(title + '\n')
 		f.close()
@@ -372,7 +372,7 @@ def getMaxEpisode(episodes):
 		ep = int(ep)
 		maxEp = max(ep, maxEp)
 	return maxEp
-	
+
 def getTimeStr():
 	return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
