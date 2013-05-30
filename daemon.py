@@ -46,7 +46,6 @@ def main(args):
 	if not os.path.isdir(DIR_MOVIES):
 		print 'please delete file named ' + DIR_MOVIES
 		exit()
-	
 	while True:
 		log("Loading settings.json")
 		if loadSettings():
@@ -75,10 +74,16 @@ def main(args):
 					except socket.error as ex:
 						log(show['title'] + ": " + str(ex))
 			log("sleeping for: " + str(settings["sleep"]) + ' seconds.')
-			time.sleep(settings["sleep"])
+			doSleep(settings["sleep"])
 		else:
 			log("Please fix your settings file, retry in 1 Minute.")
-			time.sleep(60)
+			doSleep(60)
+
+def doSleep(duration):
+	try:
+		time.sleep(duration)
+	except KeyboardInterrupt:
+		pass
 
 def loadSettings():
 	global settingsObj, settings
@@ -172,7 +177,8 @@ def doShow(show):
 		
 		goodTitle, rule = titleOK(show, itemObj['title'])
 		if not goodTitle:
-			log("deny: " + itemObj['title'] + ". rule: " + rule)
+			if rule is not None:
+				log("deny: " + itemObj['title'] + ". rule: " + rule)
 			continue
 		
 		log('new episode: ' + str(episode))
@@ -278,7 +284,8 @@ def doMovie(movie):
 		
 		goodTitle, rule = titleOK(movie, title)
 		if not goodTitle:
-			log("deny: " + title + ". rule: " + rule)
+			if rule is not None:
+				log("deny: " + title + ". rule: " + rule)
 			continue
 		
 		log('new movie: ' + str(cTitle))
@@ -297,8 +304,17 @@ def doMovie(movie):
 
 def titleOK(show, title):
 	title = cleanTitle(title).lower()
-	titleTokens = title.split()
-	titleTokens = set(titleTokens)
+	showT = cleanTitle(show["title"]).lower()
+	titleList = title.split()
+	showTitleList = showT.split()
+#	if title.find(showT) == -1:
+#		return False, None
+	if find_sublist(titleList, showTitleList) == -1:
+		return False, None
+	titleTokens = set(titleList)
+	showTitleTokens = set(showTitleList)
+	if not (showTitleTokens <= titleTokens):
+		return False, None
 	if 'deny' in show:
 		rules = show['deny']
 		if rules is str:
@@ -324,6 +340,26 @@ def titleOK(show, title):
 		if len(res) > 0:
 			return False, res.pop()
 	return True, None
+
+def find_sublist(list_, sublist):
+	if not list_:
+		return -1
+	if not sublist:
+		return 0
+	size = len(sublist)
+	if size == 1:
+		return list_.index(first)
+	first = sublist[0]
+	pos = 0
+	try:
+		while True:
+			pos = list_.index(first, pos+1)
+			if pos == -1:
+				return pos
+			if list_[pos:pos+size] == sublist:
+				return pos
+	except ValueError:
+		return -1
 
 def cleanTitle(title):
 	cTitle = re.sub(r"[^A-Za-z0-9]+", " ", title).strip()
