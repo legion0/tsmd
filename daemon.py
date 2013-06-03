@@ -347,10 +347,10 @@ def find_sublist(list_, sublist):
 	if not sublist:
 		return 0
 	size = len(sublist)
+	first = sublist[0]
 	if size == 1:
 		return list_.index(first)
-	first = sublist[0]
-	pos = 0
+	pos = -1
 	try:
 		while True:
 			pos = list_.index(first, pos+1)
