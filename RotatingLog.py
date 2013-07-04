@@ -26,7 +26,7 @@ class RotatingLog:
 		self.logDirectory = logDirectory
 		if not os.path.exists(self.logDirectory):
 			os.makedirs(self.logDirectory)
-		self.settingsFile = self.logDirectory + os.sep + 'settings.json.js'
+		self.settingsFile = self.logDirectory + os.sep + 'settings.js'
 		self.__loadSettings()
 		self.__cleanUp()
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 from datetime import datetime
 from urlparse import urlparse
 import time
@@ -12,299 +13,276 @@ import engines
 import sys, string
 import socket
 
+import hashlib
+
 from RotatingLog import RotatingLog
+from copy import deepcopy
 
-DEFAULT_ENGINE = 'thepiratebay'
-DEFAULT_SETTINGS = {
-	"engine": "thepiratebay",
-	"sleep": 3 * 60
-}
+APP_SAFE_NAME = "web2rss"
 
-scriptPath = ' '.join(str(engines).split()[3:])[1:-2]
-DIR_SCRIPT = os.path.dirname(scriptPath)
-DIR_TORRENTS = DIR_SCRIPT + os.sep + 'torrents'
-DIR_MOVIES = DIR_TORRENTS + os.sep + 'movies'
-LOGS_DIR = DIR_SCRIPT + os.sep + 'logs'
-LINK_LOGS_DIR = DIR_SCRIPT + os.sep + 'linkLogs'
-FILE_SETTINGS = DIR_SCRIPT + os.sep + 'settings.json'
+SETTINGS_DIR = os.path.expanduser(os.path.join("~", ".config", APP_SAFE_NAME))
+LOGS_DIR = os.path.join(SETTINGS_DIR, "logs")
+FILE_SETTINGS = os.path.join(SETTINGS_DIR, "settings.js")
+FILE_HISTORY = os.path.join(SETTINGS_DIR, "history.js")
 
-logger = RotatingLog(LOGS_DIR)
-linkLogger = RotatingLog(LINK_LOGS_DIR)
+logger = None
 
-settingsObj = None
-settings = DEFAULT_SETTINGS
+settings = {}
+history = {}
 
 def main(args):
-	global settingsObj, settings
-	if not os.path.exists(DIR_TORRENTS):
-		os.mkdir(DIR_TORRENTS)
-	if not os.path.isdir(DIR_TORRENTS):
-		print 'please delete file named ' + DIR_TORRENTS
-		exit()
-	if not os.path.exists(DIR_MOVIES):
-		os.mkdir(DIR_MOVIES)
-	if not os.path.isdir(DIR_MOVIES):
-		print 'please delete file named ' + DIR_MOVIES
-		exit()
+	check_first_run()
+	init_logger()
 	while True:
-		log("Loading settings.json")
-		if loadSettings():
-			log("Runing")
-			for movie in settingsObj['movies']:
-				movie.update({k:v for k,v in settingsObj['default']['movie'].iteritems() if k not in movie})
-				movie['attempts'] = 2
-				while movie['attempts'] > 0:
-					movie['attempts'] = movie['attempts'] - 1
-					try:
-						doMovie(movie)
-					except urllib2.URLError as ex:
-						log(movie['title'] + ": " + str(ex))
-					except socket.error as ex:
-						log(movie['title'] + ": " + str(ex))
-
-			for show in settingsObj['shows']:
-				show.update({k:v for k,v in settingsObj['default']['show'].iteritems() if k not in show})
-				show['attempts'] = 2
-				while show['attempts'] > 0:
-					show['attempts'] = show['attempts'] - 1
-					try:
-						doShow(show)
-					except urllib2.URLError as ex:
-						log(show['title'] + ": " + str(ex))
-					except socket.error as ex:
-						log(show['title'] + ": " + str(ex))
-			log("sleeping for: " + str(settings["sleep"]) + ' seconds.')
-			doSleep(settings["sleep"])
+		log_info("Loading settings")
+		if load_settings():
+			log_info("Runing")
+			for item in settings['movies']:
+				item = merge_dicts(settings['movie_defaults'], item)
+				item["type"] = "movie"
+				do_item(item)
+			for item in settings['shows']:
+				item = merge_dicts(settings['show_defaults'], item)
+				item["type"] = "show"
+				do_item(item)
+			save_history()
+			sleep_duration = settings["settings"]["sleep"]
+			log_info("sleeping for: %r Minutes." % sleep_duration)
+			do_sleep(sleep_duration*60)
 		else:
-			log("Please fix your settings file, retry in 1 Minute.")
-			doSleep(60)
+			log_error("Please fix your settings file, retry in 1 Minute.")
+			do_sleep(60)
+			time.sleep(0.5) # let user escape sleep loop
 
-def doSleep(duration):
+def check_first_run():
+	if not os.path.exists(FILE_SETTINGS):
+		os.makedirs(SETTINGS_DIR)
+		os.makedirs(LOGS_DIR)
+		with open(FILE_SETTINGS, "w") as f:
+			f.write(pretty_json(DEFAULT_SETTINGS))
+		with open(FILE_HISTORY, "w") as f:
+			f.write(pretty_json(DEFAULT_HISTORY))
+
+def init_logger():
+	global logger
+	logger = RotatingLog(LOGS_DIR)
+
+def load_settings():
+	global settings, history
+	if not os.path.exists(FILE_SETTINGS):
+		log_error('no settings file: %r ' % FILE_SETTINGS)
+		return False
+	with open(FILE_SETTINGS) as f:
+		jsonStr = f.read()
+	try:
+		settings = json.loads(jsonStr)
+	except ValueError as ex:
+		log_error("Error Parsing settings.json")
+		log_error(str(ex))
+		return False
+	if os.path.exists(FILE_HISTORY):
+		with open(FILE_HISTORY) as f:
+			history = json.loads(f.read())
+	return True
+
+def save_history():
+	update_show_last_seen()
+	history_string = pretty_json(history)
+	with open(FILE_HISTORY, "w") as f:
+		f.write(history_string)
+
+def do_sleep(duration):
 	try:
 		time.sleep(duration)
 	except KeyboardInterrupt:
 		pass
 
-def loadSettings():
-	global settingsObj, settings
-	if not os.path.exists(FILE_SETTINGS):
-		log('no settings file ' + FILE_SETTINGS)
+def merge_dicts(a, b):
+	result = deepcopy(a)
+	for key, value in b.viewitems():
+		if isinstance(value, dict):
+			old_value = result.get(key)
+			if not isinstance(old_value, dict):
+				old_value = {}
+			result[key] = merge_dicts(old_value, value)
+#		elif isinstance(value, list):
+#			old_value = result.get(key)
+#			if not isinstance(old_value, list):
+#				old_value = []
+#			result[key] = old_value + deepcopy(value)
+		else:
+			result[key] = deepcopy(value)
+	return result
+
+def do_item(item):
+	item_type = item["type"]
+	if item_type == "movie" and is_movie_downloaded(item):
 		return False
-	f = open(FILE_SETTINGS, 'r')
-	jsonStr = f.read()
-	f.close()
-	try:
-		settingsObj = json.loads(jsonStr)
-	except ValueError:
-		log("Error Parsing settings.json")
+	attempts = item.get("attempts", 1)
+	while attempts > 0:
+		try:
+			log_info("%s: %s" %(item["type"].capitalize(), item['title']))
+			engine = get_engine(item)
+			if engine is None:
+				break
+			url = engine.constructURL(item)
+			timeout = settings.get("url_timeout", 10)
+			response = urllib2.urlopen(url, None, timeout)
+			item['attempts'] = 0 # we succeded to get the web page
+			html = response.read()
+			response.close()
+			items = engine.getItems(html)
+			for remote_item in items:
+				if item_type == "movie" and is_movie_downloaded(item):
+					return False
+				if not item_is_ok(item, remote_item):
+					continue
+				if item_type == "show":
+					current_episode = get_remote_episode(remote_item)
+					current_episode_str = episode_to_str(current_episode)
+					current_episode_int = episode_to_int(current_episode)
+					log_info('Downloading episode: %s.' % (current_episode_str,))
+					set_show_seen_episode(item, current_episode_int)
+				elif item_type == "movie":
+					log_info('Downloading movie: %r.' % (remote_item["title"],))
+					set_movie_downloaded(item)
+				link = remote_item['link']
+				if link.startswith("magnet:"):
+					open_magnet_link(item, remote_item)
+				elif link.endswith(".torrent"):
+					open_torrent_link(item, remote_item)
+				if item_type == "movie":
+					return True
+		except urllib2.URLError as ex:
+			log_error(item['title'] + ": " + str(ex))
+		except socket.error as ex:
+			log_error(item['title'] + ": " + str(ex))
+		attempts -= 1
+	return attempts > 0
+
+def item_is_ok(item, remote_item):
+	if item["type"] == "movie" and is_movie_downloaded(item):
 		return False
-	if 'default' not in settingsObj:
-		settingsObj['default'] = {}
-	if 'show' not in settingsObj['default']:
-		settingsObj['default']['show'] = {}
-	if 'movie' not in settingsObj['default']:
-		settingsObj['default']['movie'] = {}
-	if 'settings' in settingsObj:
-		settings.update(settingsObj["settings"])
-	settings["sleep"] = int(settings["sleep"]) * 60
+	min_seeds = int(item.get("seeds", 0))
+	if min_seeds > 0 and remote_item['seeds'] < min_seeds:
+		return False
+	user_name = item.get("user", "")
+	if user_name != "" and item['user'] != remote_item['user']:
+		return False
+	min_size = int(item.get("min_size", 0))
+	if min_size > 0 and remote_item['size'] < min_size:
+		return False
+	good_title, rule = title_is_ok(item, remote_item['title'])
+	if not good_title:
+		if rule is not None:
+			log_verbose("denied: %r based on rule %r." % (remote_item['title'], rule))
+		else:
+			log_debug("denied: %r." % (remote_item['title'],))
+		return False
+	if item["type"] == "show":
+		if not ('season' in remote_item and 'episode' in remote_item):
+			return False
+		current_episode = get_remote_episode_int(remote_item)
+		last_seen_episode = get_last_seen_episode(item)
+		if is_show_episode_seen_now(item, current_episode) or current_episode <= last_seen_episode:
+			return False
+	elif item["type"] == "movie":
+		pass
 	return True
 
-def doShow(show):
-	global settings
-	log("Show: " + show['title'])
-	folder = DIR_TORRENTS + os.sep + show['title']
-	if not os.path.exists(folder):
-		os.makedirs(folder)
-	engine = settings["engine"]
-	if 'engine' in show:
-		engine = show['engine']
+def get_remote_episode(remote_item):
+	return (int(remote_item.get("season", 0)), int(remote_item.get("episode", 0)))
+
+def get_remote_episode_int(remote_item):
+	return episode_to_int(get_remote_episode(remote_item))
+
+def get_remote_episode_str(remote_item):
+	return episode_to_str(get_remote_episode(remote_item))
+
+def episode_to_str(episode):
+	return "%02d_%03d" % episode
+
+def episode_to_int(episode):
+	return int(episode_to_str(episode).replace("_", ""))
+
+def get_last_seen_episode(item):
+	shows_hist = history["show"]
+	item_safe_title = safe_file_name(item["title"])
+	show_hist = shows_hist.get(item_safe_title, {})
+	return show_hist.get("last_seen_episode", 0)
+
+DEFAULT_SHOW_HIST = {"last_seen_episode": 0}
+DEFAULT_MOVIE_HIST = {"downloaded": False}
+
+def set_last_seen_episode(show, episode):
+	global history
+	item_safe_title = safe_file_name(show["title"])
+	if not item_safe_title in history["show"]:
+		history["show"][item_safe_title] = deepcopy(DEFAULT_SHOW_HIST)
+	history["show"][item_safe_title]["last_seen_episode"] = episode
+
+shows_seen_episodes = []
+def update_show_last_seen():
+	global shows_seen_episodes
+	for show in shows_seen_episodes:
+		set_last_seen_episode(show, max(show["seen_episodes"]))
+	shows_seen_episodes = []
+
+def set_show_seen_episode(show, episode):
+	if "seen_episodes" not in show:
+		shows_seen_episodes.append(show)
+		show["seen_episodes"] = set()
+	show["seen_episodes"].add(episode)
+
+def is_show_episode_seen_now(show, episode):
+	return episode in show.get("seen_episodes", [])
+
+def is_movie_downloaded(movie):
+	item_safe_title = safe_file_name(movie["title"])
+	movie_hist = history["movie"].get(item_safe_title, {})
+	return movie_hist.get("downloaded", False)
+
+def set_movie_downloaded(movie):
+	global history
+	item_safe_title = safe_file_name(movie["title"])
+	if not item_safe_title in history["movie"]:
+		history["movie"][item_safe_title] = deepcopy(DEFAULT_MOVIE_HIST)
+	history["movie"][item_safe_title]["downloaded"] = True
+
+
+def get_engine(item):
+	engine = item["engine"]
 	if engine not in dir(engines):
-		log('no such engine: ' + engine + '. Skipping show.')
-		return
-	engine = getattr(engines, engine)
+		return None
+	return getattr(engines, engine)
 
-	showMinSeed = 0
-	if 'seeds' in show:
-		showMinSeed = int(show['seeds'])
+def open_magnet_link(item, remote_item):
+	link = remote_item["link"]
+	file_name = generate_autoload_file_name(item, remote_item)
+	file_name += ".magnet"
+	file_path = os.path.join(item["auto_load_directory"], file_name)
+	with open(file_path, "w") as f:
+		f.write(link)
 
-	episodesFileName = folder + os.sep + 'episodes.txt'
-	if not os.path.exists(episodesFileName):
-		f = open(episodesFileName, 'w')
-		f.close()
-	f = open(episodesFileName, 'r')
-	eps = f.read()
-	f.close()
-	maxEp = getMaxEpisode(re.split('\n', eps)[0:-1])
-	#print maxEp
+def generate_autoload_file_name(item, remote_item):
+	file_name = safe_file_name(item["title"])
+	if item["type"] == "show":
+		file_name += "_%s" % get_remote_episode_str(remote_item)
+	file_name += "_%s" % hashlib.sha1(remote_item["link"]).hexdigest()[:8]
+	return file_name
 
-	url = engine.constructURL(show)
-	htmlFileName = folder + os.sep + 'lastFetch.html'
-	response = urllib2.urlopen(url, None, 60)
-	show['attempts'] = 0
-	html = response.read()
-	response.close()
-	f = open(htmlFileName, 'w')
-	f.write(html)
-	f.close()
+#def open_torrent_link(item, link):
+#	pass
 
-	items = engine.getItems(html)
 
-	for itemObj in items:
+#filePath = folder + os.sep + os.path.split(remote_item['link'])[-1]
+#filePath = folder + os.sep + clean_title(remote_item['title'])
+#urllib.urlretrieve(remote_item['link'], filePath)
+#os.startfile(filePath)
 
-		#print itemObj
-
-		if ('title' not in itemObj) or ('link' not in itemObj) or (('seeds' in itemObj) and (itemObj['seeds'] < showMinSeed)):
-			continue
-
-		if ('user' in show) and ('user' in itemObj) and (show['user'] <> itemObj['user']):
-			continue
-
-		if not ('season' in itemObj and 'episode' in itemObj):
-			continue
-
-		#print itemObj['season'], itemObj['episode']
-
-		episode = int(itemObj['season'] + itemObj['episode'])
-		if episode < maxEp:
-			continue
-
-		f = open(episodesFileName, 'r')
-		eps = f.read()
-		f.close()
-		seen = re.findall('^' + str(episode) + '$', eps, re.MULTILINE)#need to add "PROPER"
-		if len(seen) > 0:
-			continue
-
-		goodTitle, rule = titleOK(show, itemObj['title'])
-		if not goodTitle:
-			if rule is not None:
-				log("deny: " + itemObj['title'] + ". rule: " + rule)
-			continue
-
-		log('new episode: ' + str(episode))
-
-		logLink(itemObj['link'])
-
-		#filePath = folder + os.sep + os.path.split(itemObj['link'])[-1]
-		filePath = folder + os.sep + cleanTitle(itemObj['title'])
-
-		#urllib.urlretrieve(itemObj['link'], filePath)
-
-		#os.startfile(filePath)
-		os.startfile(itemObj['link'])
-
-		f = open(episodesFileName, 'a')
-		f.write(str(episode) + '\n')
-		f.close()
-
-def doMovie(movie):
-	global settings
-	folder = DIR_MOVIES + os.sep + movie['title']
-	if not os.path.exists(folder):
-		os.makedirs(folder)
-	engine = settings["engine"]
-	if 'engine' in movie:
-		engine = movie['engine']
-	if engine not in dir(engines):
-		log('no such engine: ' + engine + '. Skipping movie.')
-		return
-	engine = getattr(engines, engine)
-
-	movieMinSeed = 0
-	if 'seeds' in movie:
-		movieMinSeed = int(movie['seeds'])
-
-	movieMinSize = 0
-	if 'size>' in movie:
-		movieMinSize = int(movie['size>'])
-
-	maxItems = 1
-	if 'maxItems' in movie:
-		maxItems = int(movie['maxItems'])
-
-	dlFilePath = folder + os.sep + 'downloaded.txt'
-	if not os.path.exists(dlFilePath):
-		f = open(dlFilePath, 'w')
-		f.close()
-	f = open(dlFilePath, 'r')
-	dlStrList = f.read()
-	f.close()
-	dlList = re.split('\n', dlStrList)[0:-1]
-
-	if len(dlList) >= maxItems:
-		return
-
-	log("Movie: " + movie['title'])
-
-	if 'url' in movie:
-		url = movie['url']
-	else:
-		url = engine.constructURL(movie)
-	htmlFileName = folder + os.sep + 'lastFetch.html'
-
-	response = urllib2.urlopen(url, None, 60)
-	movie['attempts'] = 0
-	html = response.read()
-	response.close()
-	f = open(htmlFileName, 'w')
-	f.write(html)
-	f.close()
-
-	# f = open(htmlFileName, 'r')
-	# html = f.read()
-	# f.close()
-
-	items = engine.getItems(html)
-
-	for itemObj in items:
-		if ('title' not in itemObj) or ('link' not in itemObj) or (('seeds' in itemObj) and (itemObj['seeds'] < movieMinSeed)):
-			continue
-
-		if ('user' in movie) and ('user' in itemObj) and (movie['user'] <> itemObj['user']):
-			continue
-
-		if 'season' in itemObj or 'episode' in itemObj:
-			continue
-
-		if ('size>' in movie) and (itemObj['size'] < movieMinSize):
-			continue
-
-		f = open(dlFilePath, 'r')
-		dlStrList = f.read()
-		f.close()
-		dlList = re.split('\n', dlStrList)[0:-1]
-		if len(dlList) >= maxItems:
-			break
-
-		title = itemObj['title']
-		cTitle = cleanTitle(itemObj['title'])
-		#fileName = os.path.split(itemObj['link'])[-1]
-		if title in dlList:
-			continue
-
-		goodTitle, rule = titleOK(movie, title)
-		if not goodTitle:
-			if rule is not None:
-				log("deny: " + title + ". rule: " + rule)
-			continue
-
-		log('new movie: ' + str(cTitle))
-		logLink(itemObj['link'])
-
-		#filePath = folder + os.sep + fileName
-
-		#urllib.urlretrieve(itemObj['link'], filePath)
-
-		#os.startfile(filePath)
-		os.startfile(itemObj['link'])
-
-		f = open(dlFilePath, 'a')
-		f.write(title + '\n')
-		f.close()
-
-def titleOK(show, title):
-	title = cleanTitle(title).lower()
-	showT = cleanTitle(show["title"]).lower()
+def title_is_ok(item, title):
+	title = clean_title(title).lower()
+	showT = clean_title(item["title"]).lower()
 	titleList = title.split()
 	showTitleList = showT.split()
 #	if title.find(showT) == -1:
@@ -315,27 +293,22 @@ def titleOK(show, title):
 	showTitleTokens = set(showTitleList)
 	if not (showTitleTokens <= titleTokens):
 		return False, None
-	if 'deny' in show:
-		rules = show['deny']
-		if rules is str:
-			rules = [rules]
-		rules = [x.lower() for x in rules]
+	if 'deny' in item:
+		rules = item['deny']
+		rules = [str(x).lower() for x in rules]
 		for rule in rules:
+			rule = clean_title(rule).lower()
 			if title.find(rule) != -1:
 				return False, rule
-	if 'notInTitle' in show:
-		rules = show['notInTitle']
-		if rules is str:
-			rules = [rules]
-		rules = set([x.lower() for x in rules])
+	if 'not_in_title' in item:
+		rules = item['not_in_title']
+		rules = set([str(x).lower() for x in rules])
 		res = rules & titleTokens
 		if len(res) > 0:
 			return False, res.pop()
-	if 'inTitle' in show:
-		rules = show['inTitle']
-		if rules is str:
-			rules = [rules]
-		rules = set([x.lower() for x in rules])
+	if 'in_title' in item:
+		rules = item['in_title']
+		rules = set([str(x).lower() for x in rules])
 		res = rules - titleTokens
 		if len(res) > 0:
 			return False, res.pop()
@@ -361,10 +334,11 @@ def find_sublist(list_, sublist):
 	except ValueError:
 		return -1
 
-def cleanTitle(title):
-	cTitle = re.sub(r"[^A-Za-z0-9]+", " ", title).strip()
-#	print "@", cTitle, "@"
-	return cTitle
+def safe_file_name(file_name, replace_char = "_"):
+	return re.sub(r"[^A-Za-z0-9]+", replace_char, str(file_name)).lower().strip(replace_char)
+
+def clean_title(title):
+	return re.sub(r"[^A-Za-z0-9]+", " ", str(title)).strip(" ")
 
 def getMaxEpisode(episodes):
 	maxEp = 0
@@ -373,27 +347,66 @@ def getMaxEpisode(episodes):
 		maxEp = max(ep, maxEp)
 	return maxEp
 
-def getTimeStr():
+def pretty_json(obj, sort_keys=True, indent=4, separators=(',', ': ')):
+	return json.dumps(obj, sort_keys=sort_keys, indent=indent, separators=separators)
+
+def get_timestamp_str():
 	return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
 
-def log(entry):
-	global logger
-	s = getTimeStr() + ": " + entry
-	print s
-	logger.log(s)
+LOG_FORMAT = "%s | %-10s | %s"
 
-def logLink(link):
-	global linkLogger
-	linkLogger.log(link)
+def log_error(entry):
+	print >> sys.stderr, entry
+	logger.log(format_log_msg(entry, "ERROR"))
+def log_warning(entry):
+	logger.log(format_log_msg(entry, "WARNING"))
+def log_info(entry):
+	print entry
+	logger.log(format_log_msg(entry, "INFO"))
+def log_verbose(entry):
+	logger.log(format_log_msg(entry, "VERBOSE"))
+def log_debug(entry):
+	logger.log(format_log_msg(entry, "DEBUG"))
+def format_log_msg(entry, level):
+	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	return LOG_FORMAT % (timestamp, level, entry)
 
-def logAndExit(entry, exitcode = 1, waittime = 0):
-	log(entry)
-	if waittime > 0:
-		time.sleep(waittime)
-	exit(exitcode)
+DEFAULT_SETTINGS = {
+	"shows": [
+		{"title": "some random show you like to watch"}
+	],
+	"movies": [
+		{"title": "some random movie you are waiting for"}
+	],
+	"show_defaults": {
+		"engine": "thepiratebay",
+		"auto_load_directory": "/mnt/downloads/autoload",
+		"cat": "208",
+		"sort": "7",
+		"not_in_title": ["webrip", "webdl"],
+		"seeds": 100
+	},
+	"movie_defaults": {
+		"engine": "thepiratebay",
+		"auto_load_directory": "/mnt/downloads/auto_load_directory",
+		"cat": "207",
+		"sort": "7",
+		"not_in_title": ["trailer", "cam", "R5", "TS", "dvdscr", "dvd", "BluRaySCR", "DVDScri", "scr", "HDSCR", "HDTV", "HDTS", "webrip", "webdl", "screener", "UPSCALED"],
+		"deny": ["web dl"],
+		"in_title": ["720P"],
+		"size>": 3000,
+		"seeds": 200,
+		"maxItems": 1
+	},
+	"settings": {
+		"sleep": 360
+	}
+}
+
+DEFAULT_HISTORY = {
+	"show": {},
+	"movie": {}
+}
 
 if __name__=="__main__":
-	try:
-		main(sys.argv[1:])
-	except Exception as ex:
-		logAndExit(str(ex), waittime = 1)
+	main(sys.argv[1:])

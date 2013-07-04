@@ -16,16 +16,12 @@ class thepiratebay:
 				'\s+<td[^>]+>(\d+)<[^\n]+\n'
 	
 	@staticmethod
-	def constructURL(show):
-		escapedTitle = urllib.quote(show['title'])
-		cat = thepiratebay.DEFAULT_CAT
-		if 'cat' in show:
-			cat = show['cat']
-		sort = thepiratebay.DEFAULT_SORT
-		if 'sort' in show:
-			sort = show['sort']
+	def constructURL(item):
+		escapedTitle = urllib.quote(item['title'])
+		cat = item.get("cat", thepiratebay.DEFAULT_CAT)
+		sort = item.get("sort", thepiratebay.DEFAULT_SORT)
 		page = '0'
-		return 'http://thepiratebay.se/search/' + escapedTitle + '/' + str(page) + '/' + str(sort) + '/' + str(cat)
+		return 'http://thepiratebay.sx/search/' + escapedTitle + '/' + str(page) + '/' + str(sort) + '/' + str(cat)
 	
 	@staticmethod
 	def getItems(html):
