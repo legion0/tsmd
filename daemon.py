@@ -118,16 +118,17 @@ def do_item(item):
 	item_type = item["type"]
 	if item_type == "movie" and is_movie_downloaded(item):
 		return False
-	attempts = item.get("attempts", 1)
-	while attempts > 0:
+	item["attempts"] = item.get("attempts", 1)
+	while item["attempts"] > 0:
 		try:
 			log_info("%s: %s" %(item["type"].capitalize(), item['title']))
 			engine = get_engine(item)
 			if engine is None:
 				break
-			url = engine.constructURL(item)
+			if item.get("url", None) is None:
+				item["url"] = engine.constructURL(item)
 			timeout = settings.get("url_timeout", 10)
-			response = urllib2.urlopen(url, None, timeout)
+			response = urllib2.urlopen(item["url"], None, timeout)
 			item['attempts'] = 0 # we succeded to get the web page
 			html = response.read()
 			response.close()
@@ -154,11 +155,11 @@ def do_item(item):
 				if item_type == "movie":
 					return True
 		except urllib2.URLError as ex:
-			log_error(item['title'] + ": " + str(ex))
+			log_error(item['title'] + ": " + repr(ex))
 		except socket.error as ex:
-			log_error(item['title'] + ": " + str(ex))
-		attempts -= 1
-	return attempts > 0
+			log_error(item['title'] + ": " + repr(ex))
+		item["attempts"] -= 1
+	return item["attempts"] > 0
 
 def item_is_ok(item, remote_item):
 	if item["type"] == "movie" and is_movie_downloaded(item):
